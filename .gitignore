@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+dist/
+.DS_Store
+*.log
+server/storage/messages.json
+server/storage/users.json
+server/storage/attachments/
+client/.expo/
+client/.env
+client/android/
+client/ios/
+
+

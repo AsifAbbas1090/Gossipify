@@ -1,0 +1,28 @@
+<svg width="720" height="200" viewBox="0 0 720 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Gossipify Logo</title>
+  <desc id="desc">Wordmark with chat bubble icon</desc>
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#14b8a6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="white"/>
+  <g transform="translate(30,40)">
+    <g>
+      <rect x="0" y="0" rx="16" ry="16" width="80" height="64" fill="url(#g)"/>
+      <path d="M70 64 L60 80 L60 64 Z" fill="url(#g)"/>
+      <circle cx="24" cy="28" r="6" fill="white"/>
+      <circle cx="44" cy="28" r="6" fill="white"/>
+      <circle cx="64" cy="28" r="6" fill="white"/>
+    </g>
+    <text x="110" y="48" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="48" font-weight="700" fill="#111827">
+      Gossipify
+    </text>
+    <text x="114" y="74" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="16" fill="#6b7280">
+      Share your gossips here
+    </text>
+  </g>
+</svg>
+
+
