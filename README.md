@@ -1,83 +1,99 @@
-# Gossipify — Share your gossips here
+# Gossipify - End-to-End Encrypted Chat
 
-Educational, end-to-end encrypted, mobile chat app built with Expo (React Native + TypeScript) and a minimal Node.js relay server. Gossipify is consent-first and never exfiltrates private data without explicit user action. All message encryption/decryption happens on the client; the server stores only opaque encrypted blobs and minimal metadata.
+A WhatsApp-like encrypted chat application built with React, TypeScript, Supabase, and libsodium.
 
-## Quick start
+## Features
 
-### Prerequisites
-- Node.js 18+ and npm
-- Expo CLI: `npm i -g expo` (or use `npx expo`)
-- Two devices/emulators/simulators recommended for the demo
+- 🔐 End-to-end encryption using libsodium (X25519 + XSalsa20-Poly1305)
+- 💬 Real-time messaging with Supabase
+- 📷 Image and audio support
+- 😊 Emoji picker
+- 🚫 Block users
+- 🏷️ "Unknown" tag for first-time senders
+- 📱 Responsive design (30% chat list, 70% chat view on desktop)
+- 🔑 Secure key storage with password encryption
 
-### 1) Start the relay server
+## Setup
+
+### 1. Install Dependencies
+
 ```bash
-cd server
 npm install
+```
+
+### 2. Set Up Supabase
+
+1. Create a Supabase project at https://supabase.com
+2. Run the SQL in `supabase/schema.sql` in your Supabase SQL Editor
+3. Create a storage bucket named `encrypted-media` (see `SUPABASE_SETUP.md`)
+4. Copy `.env.example` to `.env.local` and fill in your Supabase credentials
+
+### 3. Run Development Server
+
+```bash
 npm run dev
 ```
-Server starts on http://localhost:4000 by default. For mobile devices on the same LAN, use your machine's LAN IP (e.g., http://192.168.1.10:4000). You can change the port via the `PORT` env var.
 
-### 2) Start the Expo client
+## Security Notes
+
+- **Private keys are encrypted** with user password before storage in IndexedDB
+- **All messages are encrypted client-side** before sending to Supabase
+- **Media files are encrypted** before upload to Supabase Storage
+- **Server never sees plaintext** - only encrypted blobs and metadata
+- **If you lose your private key**, you cannot decrypt old messages (by design)
+
+## Testing
+
+### Unit Tests
+
 ```bash
-cd client
-npm install
-npx expo start
-```
-Open the app on two clients (two emulators or one device + one emulator). Update `SERVER_URL` in `client/src/config.ts` to your server's reachable URL (LAN IP recommended).
-
-### Demo script (grader flow)
-1. Launch server and two clients.
-2. On first launch, each client registers: choose a username. The app generates an X25519 keypair and stores the private key in secure storage.
-3. Start a chat: enter the other user's username. The app fetches that user's public key from the server, derives a shared secret, and creates a symmetric conversation key.
-4. Send messages. The server stores only ciphertext, nonce, and metadata (from, to, timestamp). Verify in `server/storage/messages.json` that plaintext is not present.
-5. Attach an image/file: the file is encrypted client-side and uploaded as an opaque blob. Recipient downloads and decrypts client-side.
-6. Optionally delete a message (local or "delete for everyone"). The server removes the blob but cannot decrypt contents.
-
-## Architecture overview
-- Client (Expo RN + TS)
-  - Crypto: Curve25519 for key agreement, XSalsa20-Poly1305 for AEAD (via TweetNaCl). Per-conversation symmetric key derived from the X25519 shared secret.
-  - Private keys in secure storage (Expo SecureStore). Public keys registered on the server.
-  - Attachments encrypted with the conversation key and uploaded/downladed as opaque blobs.
-  - Polling-based delivery for simplicity. Delivered/seen are client-side flags.
-- Server (Node.js + Express)
-  - Relay only. Stores usernames+public keys, encrypted message blobs, timestamps, and routing metadata. Cannot decrypt.
-  - JSON file persistence for demo in `server/storage/`.
-
-## Security model (assignment level)
-- End-to-end encryption for message payloads and attachments using authenticated encryption.
-- Key exchange: Clients fetch peer public keys and derive shared secrets (X25519). Conversation symmetric keys are derived from the shared secret.
-- Per-message nonces; messages include a sender public key fingerprint.
-- Metadata visible to the server: sender, recipient, timestamps, sizes. This is a known limitation; see `security_discussion.md`.
-- Limitations: No double ratchet/forward secrecy or push-notification-secure envelopes. No key verification ceremony. See recommended improvements in `security_discussion.md`.
-
-## Ethical use and consent
-"Gossipify is an educational demo implementing client-side encryption. It never attempts to access a user’s files without explicit permission. Do not use this project to invade anyone’s privacy. Unauthorized access to other people’s data is unlawful and unethical."
-
-## Repo layout
-```
-client/                 # Expo app (React Native + TypeScript)
-server/                 # Node.js relay server (Express, JSON persistence)
-assets/
-  screenshots/          # Placeholder screenshots (PNG)
-logo.svg                # Wordmark and chat icon (light)
-logo-dark.svg           # Dark-mode variant
-README.md               # This file
-report.md               # Security architecture and testing steps
-security_discussion.md  # Threat model, limitations, future work
+npm test
 ```
 
-## Build & run
-- Server: `cd server && npm install && npm run dev`
-- Client: `cd client && npm install && npx expo start`
+### Manual Testing Checklist
 
-### Production notes (non-goal)
-- Consider replacing polling with WebSockets.
-- Use a real database for persistence.
-- Replace NaCl box/secretbox with a modern double-ratchet protocol (e.g., libsignal).
+- [ ] Generate keypair and store encrypted
+- [ ] Send text message
+- [ ] Send image
+- [ ] Send audio
+- [ ] Receive message from unknown sender (should show "Unknown" tag)
+- [ ] Add contact (should remove "Unknown" tag)
+- [ ] Block user (should prevent messaging)
+- [ ] Export/import keys
 
-## Student metadata
-- Subject: Information Security
-- Student: Muhammad Asif Abbas (BITF22M002)
-- Project: Gossipify — "Share your gossips here"
+## Project Structure
 
+```
+src/
+├── lib/
+│   ├── crypto.ts          # Encryption utilities (libsodium)
+│   ├── storage.ts          # Secure key storage (IndexedDB)
+│   ├── supabase.ts         # Supabase client
+│   ├── messages.ts         # Message operations
+│   ├── media.ts            # Media upload/download
+│   ├── contacts.ts         # Contact management
+│   ├── blocked.ts          # Block/unblock users
+│   ├── profiles.ts         # Profile operations
+│   └── chats.ts            # Chat list operations
+├── components/
+│   ├── AppShell.tsx        # Main layout
+│   ├── ChatList.tsx        # Chat list with "Unknown" tags
+│   ├── ChatView.tsx        # Message view
+│   ├── MessageBubble.tsx   # Individual message
+│   ├── Composer.tsx        # Message input with emoji/media
+│   └── Settings.tsx        # Settings panel
+├── styles/
+│   └── index.css           # Tailwind styles
+└── App.tsx                 # Root component
+```
 
+## Environment Variables
+
+```env
+VITE_SUPABASE_URL=your_project_url
+VITE_SUPABASE_ANON_KEY=your_anon_key
+```
+
+## License
+
+MIT

@@ -1,10 +1,29 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, TextInput } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  TextInput,
+  ScrollView,
+  useColorScheme,
+  ActivityIndicator,
+} from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Crypto from 'expo-crypto';
-import { getStoredKeypair, storeKeypair } from '../lib/crypto';
+import { Buffer } from 'buffer';
+import { getStoredKeypair, storeKeypair, fingerprintPublicKey } from '../lib/crypto';
 import { getUsername, saveUsername } from '../lib/storage';
+import { getTheme } from '../theme';
+import { SecurityBanner } from '../components';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withDelay,
+} from 'react-native-reanimated';
 
 async function deriveKey(pass: string): Promise<string> {
   // Demo-only: PBKDF2-like via SHA-256 iterations; recommend Argon2id in production
@@ -26,12 +45,36 @@ function xorHex(a: string, b: string): string {
 }
 
 export default function SettingsScreen() {
+  const scheme = useColorScheme() || 'light';
+  const theme = getTheme(scheme);
   const [busy, setBusy] = useState(false);
   const [username, setUsername] = useState('');
+  const [isFocused, setIsFocused] = useState(false);
+  const [publicKeyFingerprint, setPublicKeyFingerprint] = useState<string>('');
+
+  const opacity = useSharedValue(0);
+  const translateY = useSharedValue(20);
 
   useEffect(() => {
-    (async () => { const u = await getUsername(); if (u) setUsername(u); })();
+    (async () => {
+      const u = await getUsername();
+      if (u) setUsername(u);
+      const kp = await getStoredKeypair();
+      if (kp) {
+        setPublicKeyFingerprint(fingerprintPublicKey(kp.publicKey));
+      }
+    })();
   }, []);
+
+  useEffect(() => {
+    opacity.value = withSpring(1, { damping: 15 });
+    translateY.value = withSpring(0, { damping: 15 });
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: translateY.value }],
+  }));
 
   const onExport = async () => {
     try {
@@ -77,27 +120,380 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleSaveUsername = async () => {
+    if (!username.trim()) {
+      Alert.alert('Error', 'Username cannot be empty');
+      return;
+    }
+    try {
+      await saveUsername(username.trim());
+      Alert.alert('Saved', 'Username updated successfully');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to save username');
+    }
+  };
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Settings</Text>
-      <Text style={{ fontWeight: '700', marginBottom: 6 }}>Your username</Text>
-      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-        <TextInput value={username} onChangeText={setUsername} placeholder="Enter username" autoCapitalize="none" style={{ flex: 1, backgroundColor: 'white', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#e5e7eb' }} />
-        <TouchableOpacity disabled={busy || !username.trim()} onPress={async () => { try { await saveUsername(username.trim()); Alert.alert('Saved', 'Username updated'); } catch {} }} style={[styles.button, { backgroundColor: '#14b8a6' }]}><Text style={styles.buttonText}>Save</Text></TouchableOpacity>
-      </View>
-      <TouchableOpacity disabled={busy} onPress={onExport} style={styles.button}><Text style={styles.buttonText}>Export Key Backup</Text></TouchableOpacity>
-      <TouchableOpacity disabled={busy} onPress={onImport} style={styles.button}><Text style={styles.buttonText}>Import Key Backup</Text></TouchableOpacity>
-      <Text style={styles.note}>Note: Backups are encrypted with a demo passphrase. For production, prompt user and use a memory-hard KDF (Argon2id).</Text>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View style={animatedStyle}>
+          <SecurityBanner />
+        </Animated.View>
+
+        <Animated.View style={animatedStyle}>
+          <View
+            style={[
+              styles.section,
+              {
+                backgroundColor: theme.colors.backgroundCard,
+                borderColor: theme.colors.border,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.sectionTitle,
+                {
+                  color: theme.colors.textPrimary,
+                },
+              ]}
+            >
+              Profile
+            </Text>
+            <View style={styles.inputGroup}>
+              <Text
+                style={[
+                  styles.label,
+                  {
+                    color: theme.colors.textSecondary,
+                  },
+                ]}
+              >
+                Username
+              </Text>
+              <View style={styles.inputRow}>
+                <TextInput
+                  value={username}
+                  onChangeText={setUsername}
+                  placeholder="Enter username"
+                  placeholderTextColor={theme.colors.textTertiary}
+                  autoCapitalize="none"
+                  style={[
+                    styles.input,
+                    {
+                      backgroundColor: theme.colors.background,
+                      borderColor: isFocused
+                        ? theme.colors.borderFocus
+                        : theme.colors.border,
+                      color: theme.colors.textPrimary,
+                    },
+                  ]}
+                  onFocus={() => setIsFocused(true)}
+                  onBlur={() => setIsFocused(false)}
+                  editable={!busy}
+                />
+                <TouchableOpacity
+                  disabled={busy || !username.trim()}
+                  onPress={handleSaveUsername}
+                  style={[
+                    styles.saveButton,
+                    {
+                      backgroundColor:
+                        busy || !username.trim()
+                          ? theme.colors.border
+                          : theme.colors.primary,
+                    },
+                  ]}
+                >
+                  {busy ? (
+                    <ActivityIndicator
+                      size="small"
+                      color={theme.colors.textInverse}
+                    />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.saveButtonText,
+                        {
+                          color: theme.colors.textInverse,
+                        },
+                      ]}
+                    >
+                      Save
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Animated.View>
+
+        <Animated.View style={animatedStyle}>
+          <View
+            style={[
+              styles.section,
+              {
+                backgroundColor: theme.colors.backgroundCard,
+                borderColor: theme.colors.border,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.sectionTitle,
+                {
+                  color: theme.colors.textPrimary,
+                },
+              ]}
+            >
+              Security
+            </Text>
+            {publicKeyFingerprint && (
+              <View
+                style={[
+                  styles.fingerprintContainer,
+                  {
+                    backgroundColor: theme.colors.background,
+                    borderColor: theme.colors.border,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.fingerprintLabel,
+                    {
+                      color: theme.colors.textTertiary,
+                    },
+                  ]}
+                >
+                  Your Public Key Fingerprint
+                </Text>
+                <Text
+                  style={[
+                    styles.fingerprint,
+                    {
+                      color: theme.colors.textPrimary,
+                    },
+                  ]}
+                  selectable
+                >
+                  {publicKeyFingerprint.match(/.{1,4}/g)?.join(' ') || publicKeyFingerprint}
+                </Text>
+              </View>
+            )}
+          </View>
+        </Animated.View>
+
+        <Animated.View style={animatedStyle}>
+          <View
+            style={[
+              styles.section,
+              {
+                backgroundColor: theme.colors.backgroundCard,
+                borderColor: theme.colors.border,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.sectionTitle,
+                {
+                  color: theme.colors.textPrimary,
+                },
+              ]}
+            >
+              Backup & Restore
+            </Text>
+            <Text
+              style={[
+                styles.sectionDescription,
+                {
+                  color: theme.colors.textSecondary,
+                },
+              ]}
+            >
+              Export your encryption keys for backup. Keep backups secure and
+              never share them.
+            </Text>
+            <TouchableOpacity
+              disabled={busy}
+              onPress={onExport}
+              style={[
+                styles.actionButton,
+                {
+                  backgroundColor: theme.colors.primary,
+                  opacity: busy ? 0.6 : 1,
+                },
+              ]}
+            >
+              <Text style={styles.actionButtonIcon}>💾</Text>
+              <Text
+                style={[
+                  styles.actionButtonText,
+                  {
+                    color: theme.colors.textInverse,
+                  },
+                ]}
+              >
+                Export Key Backup
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              disabled={busy}
+              onPress={onImport}
+              style={[
+                styles.actionButton,
+                {
+                  backgroundColor: theme.colors.background,
+                  borderColor: theme.colors.border,
+                  borderWidth: 1,
+                  opacity: busy ? 0.6 : 1,
+                },
+              ]}
+            >
+              <Text style={styles.actionButtonIcon}>📥</Text>
+              <Text
+                style={[
+                  styles.actionButtonText,
+                  {
+                    color: theme.colors.textPrimary,
+                  },
+                ]}
+              >
+                Import Key Backup
+              </Text>
+            </TouchableOpacity>
+            <View
+              style={[
+                styles.noteContainer,
+                {
+                  backgroundColor: theme.colors.primarySubtle,
+                  borderColor: theme.colors.primary,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.noteText,
+                  {
+                    color: theme.colors.textSecondary,
+                  },
+                ]}
+              >
+                ⚠️ Note: Backups are encrypted with a demo passphrase. For
+                production, prompt user and use a memory-hard KDF (Argon2id).
+              </Text>
+            </View>
+          </View>
+        </Animated.View>
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16 },
-  title: { fontSize: 24, fontWeight: '800', marginBottom: 12 },
-  button: { backgroundColor: '#111827', padding: 12, borderRadius: 12, marginBottom: 12 },
-  buttonText: { color: 'white', fontWeight: '700', textAlign: 'center' },
-  note: { color: '#64748b' },
+  container: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+  },
+  section: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 20,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  sectionDescription: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  inputGroup: {
+    marginBottom: 8,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  input: {
+    flex: 1,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    fontSize: 16,
+    minHeight: 48,
+  },
+  saveButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 80,
+  },
+  saveButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  fingerprintContainer: {
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  fingerprintLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  fingerprint: {
+    fontSize: 16,
+    fontWeight: '600',
+    fontFamily: 'monospace',
+    letterSpacing: 1,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  actionButtonIcon: {
+    fontSize: 20,
+    marginRight: 12,
+  },
+  actionButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    flex: 1,
+  },
+  noteContainer: {
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  noteText: {
+    fontSize: 12,
+    lineHeight: 18,
+  },
 });
 
 

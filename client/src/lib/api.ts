@@ -26,13 +26,25 @@ export async function sendMessage(payload: {
   fingerprint: string;
   timestamp: number;
   attachmentId?: string;
+  mime?: string | null;
+  name?: string | null;
 }) {
   const r = await fetch(`${SERVER_URL}/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!r.ok) throw new Error('send failed');
+  if (!r.ok) {
+    const errorText = await r.text();
+    let errorDetails;
+    try {
+      errorDetails = JSON.parse(errorText);
+    } catch {
+      errorDetails = { error: errorText };
+    }
+    console.error('Send message failed:', errorDetails, 'Payload:', payload);
+    throw new Error(`send failed: ${errorDetails.error || errorText}`);
+  }
   return r.json();
 }
 
@@ -44,17 +56,40 @@ export async function poll(username: string, since: number) {
 
 export async function uploadAttachment(uri: string) {
   const form = new FormData();
-  form.append('blob', {
-    // @ts-expect-error React Native FormData file fields
-    uri,
-    name: 'blob',
-    type: 'application/octet-stream',
-  });
+  
+  // For web, we need to fetch the file and create a Blob
+  if (typeof window !== 'undefined' && (uri.startsWith('file://') || uri.startsWith('/'))) {
+    try {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      form.append('blob', blob, 'blob');
+    } catch (e) {
+      // Fallback to React Native FormData format
+      form.append('blob', {
+        // @ts-expect-error React Native FormData file fields
+        uri,
+        name: 'blob',
+        type: 'application/octet-stream',
+      } as any);
+    }
+  } else {
+    // React Native FormData format
+    form.append('blob', {
+      // @ts-expect-error React Native FormData file fields
+      uri,
+      name: 'blob',
+      type: 'application/octet-stream',
+    } as any);
+  }
+  
   const r = await fetch(`${SERVER_URL}/upload`, {
     method: 'POST',
     body: form as any,
   });
-  if (!r.ok) throw new Error('upload failed');
+  if (!r.ok) {
+    const errorText = await r.text();
+    throw new Error(`upload failed: ${errorText}`);
+  }
   return r.json();
 }
 

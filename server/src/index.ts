@@ -35,6 +35,8 @@ type StoredMessage = {
   fingerprint: string; // sender pubkey fingerprint
   timestamp: number;
   attachmentId?: string; // optional id for attachment
+  mime?: string; // mime type for attachments
+  name?: string; // file name for attachments
   deleted?: boolean;
   deletedAt?: number;
 };
@@ -77,19 +79,26 @@ app.get('/users/:username', (req, res) => {
 
 // Send encrypted message
 app.post('/send', (req, res) => {
-  const { from, to, ciphertext, nonce, fingerprint, timestamp, attachmentId } = req.body || {};
-  if (!from || !to || !ciphertext || !nonce || !timestamp || !fingerprint) {
-    return res.status(400).json({ error: 'missing fields' });
+  const { from, to, ciphertext, nonce, fingerprint, timestamp, attachmentId, mime, name } = req.body || {};
+  // Allow empty ciphertext if attachmentId is provided
+  // Check: must have either ciphertext (non-empty) or attachmentId
+  const hasCiphertext = ciphertext && ciphertext.trim().length > 0;
+  const hasAttachment = attachmentId && attachmentId.trim().length > 0;
+  
+  if (!from || !to || (!hasCiphertext && !hasAttachment) || !nonce || !timestamp || !fingerprint) {
+    return res.status(400).json({ error: 'missing fields', details: { from: !!from, to: !!to, hasCiphertext, hasAttachment, hasNonce: !!nonce, hasTimestamp: !!timestamp, hasFingerprint: !!fingerprint } });
   }
   const msg: StoredMessage = {
     id: nanoid(12),
     from,
     to,
-    ciphertext,
+    ciphertext: ciphertext || '', // Store empty string if not provided
     nonce,
     fingerprint,
     timestamp,
     attachmentId,
+    mime,
+    name,
   };
   const messages = readMessages();
   messages.push(msg);
@@ -97,14 +106,23 @@ app.post('/send', (req, res) => {
   return res.json({ ok: true, id: msg.id });
 });
 
-// Poll messages for a user
+// Poll messages for a user (returns messages both TO and FROM the user)
 app.get('/poll/:username', (req, res) => {
   const username = req.params.username;
   const since = req.query.since ? Number(req.query.since) : 0;
   const all = readMessages();
-  const messages = all.filter(m => m.to === username && m.timestamp >= since && !m.deleted);
+  // Return messages both TO and FROM the user
+  const messages = all.filter(m => 
+    (m.to === username || m.from === username) && 
+    m.timestamp >= since && 
+    !m.deleted
+  );
   const deletions = all
-    .filter(m => m.to === username && m.deleted && (m.deletedAt || 0) >= since)
+    .filter(m => 
+      (m.to === username || m.from === username) && 
+      m.deleted && 
+      (m.deletedAt || 0) >= since
+    )
     .map(m => ({ id: m.id, deletedAt: m.deletedAt }));
   return res.json({ messages, deletions });
 });

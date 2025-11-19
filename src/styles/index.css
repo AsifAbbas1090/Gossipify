@@ -1,0 +1,178 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* WhatsApp Web exact colors and styling */
+:root {
+  --wa-bg-chat: #EFEAE2;
+  --wa-bg-header: #F0F2F5;
+  --wa-bg-white: #FFFFFF;
+  --wa-text-primary: #111B21;
+  --wa-text-secondary: #667781;
+  --wa-message-sent: #DCF8C6;
+  --wa-message-received: #FFFFFF;
+  --wa-border: #E9EDEF;
+  --wa-hover: #F5F6F6;
+  --wa-unread: #25D366;
+}
+
+/* WhatsApp-like responsive layout */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+  background: var(--wa-bg-chat);
+}
+
+.chat-list-container {
+  width: 30%;
+  min-width: 310px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  background: var(--wa-bg-white);
+  border-right: 1px solid var(--wa-border);
+}
+
+.chat-view-container {
+  flex: 1;
+  width: 70%;
+  display: flex;
+  flex-direction: column;
+  background: var(--wa-bg-chat);
+  background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3Cpattern id='a' patternUnits='userSpaceOnUse' width='100' height='100' patternTransform='scale(0.5) rotate(0)'%3E%3Crect x='0' y='0' width='100%25' height='100%25' fill='hsla(0,0%25,100%25,0)'/%3E%3Cpath d='M0 0h50v50H0z' stroke='%23e5e5e5' stroke-width='1' fill='none'/%3E%3C/pattern%3E%3C/defs%3E%3Crect fill='url(%23a)' width='100%25' height='100%25'/%3E%3C/svg%3E");
+  background-size: 100px 100px;
+}
+
+/* Mobile responsive - WhatsApp style */
+@media (max-width: 768px) {
+  .app-shell {
+    position: relative;
+  }
+  
+  .chat-list-container {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 10;
+    transition: transform 0.3s ease-in-out;
+  }
+  
+  .chat-list-container.hidden {
+    transform: translateX(-100%);
+  }
+  
+  .chat-view-container {
+    width: 100%;
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 20;
+  }
+  
+  .chat-view-container:not(.flex) {
+    display: none;
+  }
+}
+
+/* Tablet: slightly wider chat list */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .chat-list-container {
+    width: 35%;
+    max-width: 400px;
+  }
+  
+  .chat-view-container {
+    width: 65%;
+  }
+}
+
+/* Desktop: ensure 30/70 split */
+@media (min-width: 1025px) {
+  .chat-list-container {
+    width: 30%;
+    max-width: 420px;
+  }
+  
+  .chat-view-container {
+    width: 70%;
+    flex: 1;
+  }
+}
+
+/* Scrollbar styling - WhatsApp style */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* WhatsApp message bubble styling */
+.message-bubble-sent {
+  background: var(--wa-message-sent);
+  border-radius: 7.5px;
+  border-top-right-radius: 0;
+  box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+}
+
+.message-bubble-received {
+  background: var(--wa-message-received);
+  border-radius: 7.5px;
+  border-top-left-radius: 0;
+  box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+}
+
+/* WhatsApp input styling */
+.wa-input {
+  background: var(--wa-bg-white);
+  border-radius: 21px;
+  border: none;
+  outline: none;
+  padding: 9px 12px;
+  font-size: 15px;
+  line-height: 20px;
+  color: var(--wa-text-primary);
+}
+
+.wa-input:focus {
+  outline: none;
+}
+
+/* WhatsApp button styling */
+.wa-button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.wa-button:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.wa-button:active {
+  background: rgba(0, 0, 0, 0.1);
+}
