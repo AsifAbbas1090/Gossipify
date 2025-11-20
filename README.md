@@ -160,12 +160,6 @@ cd client
 npm start
 ```
 
-Then:
-- Press `w` to open in web browser
-- Press `a` to open in Android emulator
-- Press `i` to open in iOS simulator
-- Scan QR code with Expo Go app on your phone
-
 **Note**: For web development, you can also use:
 ```bash
 cd client
