@@ -64,31 +64,44 @@ export async function encryptAndUploadAttachment(att: PickedAttachment, key: Uin
   const bytes = fromBase64(base64);
   const { nonce, ciphertext } = encryptMessage(bytes, key);
   
-  // For web, create a Blob and upload directly
-  // For native, write to file system first
+  // ciphertext from encryptMessage is already base64-encoded string
+  // For web, we need to decode it to bytes, then create Blob
+  // For native, we can write the base64 string directly
   if (typeof window !== 'undefined') {
-    // Web: convert base64 to Blob and upload
-    const cipherBlob = new Blob([new Uint8Array(fromBase64(ciphertext))], { type: 'application/octet-stream' });
-    const form = new FormData();
-    form.append('blob', cipherBlob, 'encrypted.bin');
-    
-    const r = await fetch(`${SERVER_URL}/upload`, {
-      method: 'POST',
-      body: form,
-    });
-    if (!r.ok) {
-      const errorText = await r.text();
-      throw new Error(`upload failed: ${errorText}`);
+    // Web: convert base64 ciphertext to Uint8Array, then to Blob
+    try {
+      const cipherBytes = fromBase64(ciphertext);
+      const cipherBlob = new Blob([cipherBytes], { type: 'application/octet-stream' });
+      const form = new FormData();
+      form.append('blob', cipherBlob, 'encrypted.bin');
+      
+      const r = await fetch(`${SERVER_URL}/upload`, {
+        method: 'POST',
+        body: form,
+      });
+      if (!r.ok) {
+        const errorText = await r.text();
+        console.error('Upload failed:', errorText);
+        throw new Error(`upload failed: ${errorText}`);
+      }
+      const { id } = await r.json();
+      return { id, nonce, mime: att.mime ?? null, name: att.name, size: att.size ?? null };
+    } catch (e) {
+      console.error('Upload error:', e);
+      throw new Error('Failed to upload attachment: ' + (e instanceof Error ? e.message : 'Unknown error'));
     }
-    const { id } = await r.json();
-    return { id, nonce, mime: att.mime ?? null, name: att.name, size: att.size ?? null };
   } else {
-    // Native: use FileSystem
-    const tmp = FileSystem.cacheDirectory + 'enc-' + Date.now() + '.bin';
-    await FileSystem.writeAsStringAsync(tmp, ciphertext, { encoding: FileSystem.EncodingType.Base64 });
-    const { uploadAttachment } = await import('./api');
-    const { id } = await uploadAttachment(tmp);
-    return { id, nonce, mime: att.mime ?? null, name: att.name, size: att.size ?? null };
+    // Native: use FileSystem - write base64 string directly
+    try {
+      const tmp = FileSystem.cacheDirectory + 'enc-' + Date.now() + '.bin';
+      await FileSystem.writeAsStringAsync(tmp, ciphertext, { encoding: FileSystem.EncodingType.Base64 });
+      const { uploadAttachment } = await import('./api');
+      const { id } = await uploadAttachment(tmp);
+      return { id, nonce, mime: att.mime ?? null, name: att.name, size: att.size ?? null };
+    } catch (e) {
+      console.error('Upload error:', e);
+      throw new Error('Failed to upload attachment: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    }
   }
 }
 

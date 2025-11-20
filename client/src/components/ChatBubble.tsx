@@ -144,7 +144,11 @@ export default function ChatBubble({
         ) : attachment ? (
           <View>
             {attachment.mime?.startsWith('audio/') ? (
-              <View style={styles.audioContainer}>
+              <TouchableOpacity 
+                onPress={onPress}
+                activeOpacity={0.7}
+                style={styles.audioContainer}
+              >
                 <Text style={styles.audioIcon}>🎵</Text>
                 <Text
                   style={[
@@ -156,7 +160,7 @@ export default function ChatBubble({
                     },
                   ]}
                 >
-                  {attachment.name || 'Audio message'}
+                  {attachment.name || 'Voice message'}
                 </Text>
                 {attachment.isDecrypting && (
                   <Text
@@ -172,7 +176,7 @@ export default function ChatBubble({
                     Decrypting...
                   </Text>
                 )}
-              </View>
+              </TouchableOpacity>
             ) : (
               <View>
                 <Text

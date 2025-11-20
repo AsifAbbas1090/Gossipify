@@ -144,7 +144,7 @@ export default function HomeScreen({ onSelectChat, selectedChat }: HomeScreenPro
       return;
     }
     if (onSelectChat) {
-      onSelectChat(peer.trim());
+      onSelectChat(peer.trim().toLowerCase()); // Normalize to lowercase
     }
     setPeer('');
   };

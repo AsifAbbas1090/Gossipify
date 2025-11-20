@@ -65,6 +65,8 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
   const [sendingMessageId, setSendingMessageId] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [draftAttachment, setDraftAttachment] = useState<{ uri: string; mime?: string | null; name: string } | null>(null);
+  const [peerNotFound, setPeerNotFound] = useState(false);
+  const [isLoadingPeer, setIsLoadingPeer] = useState(true);
 
   const convoKeyRef = useRef<Uint8Array | null>(null);
   const meRef = useRef<string>('');
@@ -73,91 +75,153 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
   const sinceRef = useRef<number>(0);
   const flatListRef = useRef<FlatList>(null);
   const peerPubRef = useRef<string>('');
+  const initialLoadRef = useRef<boolean>(true);
+  const chatOpenTimeRef = useRef<number>(0);
 
   useEffect(() => {
+    let isMounted = true;
+    setIsLoadingPeer(true);
+    setPeerNotFound(false);
+    
     (async () => {
-      const me = await getStoredKeypair();
-      if (!me) {
-        Alert.alert('Error', 'Missing keys. Please restart and register.');
-        return;
-      }
-      meUserRef.current = (await getUsername()) || '';
-      meRef.current = me.publicKey;
-      const peerPub = await getPublicKey(peerUsername.trim());
-      if (!peerPub) {
-        Alert.alert(
-          'User not found',
-          `User "${peerUsername}" is not registered. They need to register first before you can chat with them.`,
-          [{ text: 'OK', onPress: () => {
-            if (onBack) {
-              onBack();
-            } else {
-              navigation.goBack();
+      try {
+        const me = await getStoredKeypair();
+        if (!me) {
+          Alert.alert('Error', 'Missing keys. Please restart and register.');
+          if (isMounted) setIsLoadingPeer(false);
+          return;
+        }
+        meUserRef.current = (await getUsername()) || '';
+        if (!meUserRef.current) {
+          Alert.alert('Error', 'Your username is not set. Please restart the app.');
+          if (isMounted) setIsLoadingPeer(false);
+          return;
+        }
+        meRef.current = me.publicKey;
+        const normalizedPeer = peerUsername.trim().toLowerCase();
+        
+        console.log('[ChatScreen] Looking up peer:', normalizedPeer);
+        const peerPub = await getPublicKey(normalizedPeer);
+        if (!isMounted) return;
+        
+        if (!peerPub) {
+          console.error('[ChatScreen] Peer not found:', normalizedPeer);
+          // Try to get server stats to show available users
+          try {
+            const statsRes = await fetch('http://localhost:4000/stats');
+            if (statsRes.ok) {
+              const stats = await statsRes.json();
+              console.log('[ChatScreen] Available users on server:', stats.activeUsers);
             }
-          }}]
-        );
-        return;
+          } catch {}
+          setPeerNotFound(true);
+          setIsLoadingPeer(false);
+          return;
+        }
+        console.log('[ChatScreen] Peer found, setting up conversation key');
+        peerPubRef.current = peerPub;
+        convoKeyRef.current = deriveSharedKey(me.secretKey, peerPub);
+        setPeerFingerprint(fingerprintPublicKey(peerPub));
+        setPeerNotFound(false);
+        // Load ALL messages (since timestamp 0) when opening a chat
+        sinceRef.current = 0;
+        setSince(0);
+        setIsLoadingPeer(false);
+      } catch (e) {
+        console.error('[ChatScreen] Error setting up peer:', e);
+        if (isMounted) {
+          setPeerNotFound(true);
+          setIsLoadingPeer(false);
+        }
       }
-      peerPubRef.current = peerPub;
-      convoKeyRef.current = deriveSharedKey(me.secretKey, peerPub);
-      setPeerFingerprint(fingerprintPublicKey(peerPub));
-      const start = Date.now() - 1000 * 60 * 60;
-      sinceRef.current = start;
-      setSince(start);
     })();
+    
+    return () => {
+      isMounted = false;
+    };
   }, [peerUsername, navigation, onBack]);
 
+  // Polling loop for messages - runs continuously
   useEffect(() => {
     let timer: any;
+    let isMounted = true;
+    // Capture peerUsername at the start of the effect to ensure consistency
+    const currentPeer = peerUsername.trim().toLowerCase();
+    
+    // Reset items when peer changes to prevent cross-chat contamination
+    if (currentPeer) {
+      setItems([]);
+      // Load ALL messages (since timestamp 0) when opening a chat
+      sinceRef.current = 0;
+      setSince(0);
+      initialLoadRef.current = true;
+      chatOpenTimeRef.current = Date.now();
+    }
+    
     const loop = async () => {
       try {
         const user = meUserRef.current;
         const key = convoKeyRef.current;
-        if (!user || !key) {
-          timer = setTimeout(loop, 2000);
+        
+        // Double-check peer hasn't changed
+        const currentPeerCheck = peerUsername.trim().toLowerCase();
+        if (currentPeerCheck !== currentPeer) {
+          // Peer changed, stop this loop
           return;
         }
+        
+        if (!user || !key || !currentPeer) {
+          if (isMounted) timer = setTimeout(loop, 1000);
+          return;
+        }
+        
         const sinceLocal = sinceRef.current;
         const r = await poll(user, sinceLocal);
+        if (!isMounted) return;
+        
+        // Check again after async operation
+        if (peerUsername.trim().toLowerCase() !== currentPeer) {
+          return;
+        }
+        
         let updatedSince = sinceLocal;
+        const myUsername = String(user || '').trim().toLowerCase();
+        let hasNewMessages = false;
+        let hasTrulyNewMessages = false; // Messages that arrived AFTER opening the chat
+        
         setItems((prev) => {
+          // Only process messages for THIS specific conversation
           const existing = new Set(prev.map((p) => p.id));
           const next = [...prev];
-          const currentPeer = peerUsername.trim().toLowerCase();
-          const myUsername = String(user || '').trim().toLowerCase();
           
           for (const m of r.messages as any[]) {
             if (existing.has(m.id)) continue;
+            
             const msgFrom = String(m.from || '').trim().toLowerCase();
             const msgTo = String(m.to || '').trim().toLowerCase();
             
-            // First check: message must involve current user
-            if (msgFrom !== myUsername && msgTo !== myUsername) continue;
-            
-            // Second check: message must be between current user and current peer ONLY
-            // This is critical - we must ensure the message is EXACTLY between these two users
+            // STRICT FILTERING: Message must be EXACTLY between current user and current peer
+            // Both users must match exactly (no partial matches)
             const isFromMeToPeer = msgFrom === myUsername && msgTo === currentPeer;
             const isFromPeerToMe = msgFrom === currentPeer && msgTo === myUsername;
             
+            // Only process if it's one of these two exact scenarios
             if (!isFromMeToPeer && !isFromPeerToMe) {
-              // This message is not for this chat, skip it
+              // This message is NOT for this conversation - skip it
               continue;
             }
             
-            // Additional safety check: ensure peer is not empty and matches exactly
-            if (!currentPeer || currentPeer === '') continue;
-            if (msgFrom !== myUsername && msgFrom !== currentPeer) continue;
-            if (msgTo !== myUsername && msgTo !== currentPeer) continue;
+            hasNewMessages = true;
+            
+            // Only scroll if this is a truly new message (arrived after chat was opened)
+            // OR if it's from me (I just sent it)
+            if (m.timestamp > chatOpenTimeRef.current || isFromMeToPeer) {
+              hasTrulyNewMessages = true;
+            }
             
             // Message is for this chat
-            // Compare using lowercase to ensure consistency
-            if (msgFrom === myUsername) {
-              // This is a message I sent - verify it's to the current peer
-              if (msgTo !== currentPeer) {
-                // This message is not to the current peer - skip it
-                continue;
-              }
-              
+            if (isFromMeToPeer) {
+              // This is a message I sent to the current peer
               const tempId = sendingMessageId;
               if (tempId && m.id) {
                 setSendingMessageId(null);
@@ -183,17 +247,15 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
                 status: 'sent',
               });
               existing.add(m.id);
-            } else {
-              // This is a message FROM the peer TO me
+            } else if (isFromPeerToMe) {
+              // This is a message FROM the current peer TO me
               // CRITICAL: Verify this message is actually from the current peer by checking fingerprint
               const messageFingerprint = m.fingerprint || '';
               const currentPeerFingerprint = peerPubRef.current ? fingerprintPublicKey(peerPubRef.current) : '';
               
               // If we have fingerprints, they MUST match for this message to belong to this chat
-              // This prevents messages from other peers (encrypted with different keys) from appearing
               if (messageFingerprint && currentPeerFingerprint && messageFingerprint !== currentPeerFingerprint) {
                 // This message is encrypted with a different key - it's from a different peer
-                // Skip it - it doesn't belong in this conversation
                 continue;
               }
               
@@ -203,28 +265,16 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
                 try {
                   const opened = decryptMessage(m.ciphertext, m.nonce, key);
                   if (!opened) {
-                    // Decryption failed - this message is not for this conversation
-                    // Skip it to prevent wrong messages from appearing
-                    console.warn('Failed to decrypt message - wrong key or corrupted', { 
-                      from: m.from, 
-                      to: m.to, 
-                      id: m.id,
-                      currentPeer: currentPeer,
-                      messageFingerprint,
-                      currentPeerFingerprint
-                    });
+                    // Decryption failed - skip this message (wrong key = wrong conversation)
                     continue;
                   }
                   decryptedText = Buffer.from(opened).toString('utf8');
                 } catch (error) {
                   // Decryption error - skip this message
-                  console.error('Error decrypting message:', error, { from: m.from, to: m.to, id: m.id });
                   continue;
                 }
               }
               
-              // For attachment messages, verify we can at least access the attachment
-              // If decryption would fail, we shouldn't show it
               // Handle attachment messages (ciphertext may be empty)
               next.push({
                 id: m.id,
@@ -241,7 +291,11 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
               });
               existing.add(m.id);
             }
+            
+            // Update since timestamp to latest message timestamp
+            updatedSince = Math.max(updatedSince, m.timestamp);
           }
+          
           if (r.deletions && Array.isArray(r.deletions)) {
             for (const d of r.deletions as any[]) {
               updatedSince = Math.max(updatedSince, (d.deletedAt || 0) + 1);
@@ -253,16 +307,45 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
           }
           return next.sort((a, b) => a.timestamp - b.timestamp);
         });
-        if (updatedSince !== sinceLocal) {
+        
+        // Update since timestamp to latest message we've seen
+        if (hasNewMessages || updatedSince !== sinceLocal) {
           sinceRef.current = updatedSince;
           setSince(updatedSince);
         }
-      } catch {}
-      timer = setTimeout(loop, 1500);
+        
+        // Only scroll if:
+        // 1. Initial load is complete AND we have truly new messages (arrived after opening chat)
+        // 2. OR if it's a message we just sent
+        // Don't scroll on initial load of old messages
+        if (initialLoadRef.current && hasNewMessages) {
+          // First load complete - scroll to bottom once, then mark as loaded
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: false }); // No animation on initial load
+          }, 300);
+          initialLoadRef.current = false;
+        } else if (!initialLoadRef.current && hasTrulyNewMessages) {
+          // Only scroll for truly new messages after initial load
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }
+      } catch (e) {
+        console.error('[ChatScreen] Poll error:', e);
+      }
+      if (isMounted) {
+        // Faster polling for real-time feel (800ms instead of 1500ms)
+        timer = setTimeout(loop, 800);
+      }
     };
+    
+    // Start polling immediately
     loop();
-    return () => clearTimeout(timer);
-  }, [peerUsername, since, sendingMessageId]);
+    return () => {
+      isMounted = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [peerUsername, sendingMessageId]);
 
   function convertShortcodes(text: string): string {
     const map: Record<string, string> = {
@@ -281,11 +364,28 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
   const onSend = async () => {
     const text = input.trim();
     if (!text) return;
+    
+    // Check if we have the peer's public key (conversation key)
+    if (!convoKeyRef.current) {
+      Alert.alert(
+        'Error',
+        'Peer not found. Please make sure the user is registered and try again.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
     setInput('');
     const me = await getStoredKeypair();
-    if (!me) return;
+    if (!me) {
+      Alert.alert('Error', 'Encryption keys not found. Please restart the app.');
+      return;
+    }
     const key = convoKeyRef.current;
-    if (!key) return;
+    if (!key) {
+      Alert.alert('Error', 'Cannot encrypt message. Peer key not available.');
+      return;
+    }
     if (!meUserRef.current) {
       const username = await getUsername();
       if (!username) {
@@ -294,30 +394,43 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
       }
       meUserRef.current = username;
     }
-    const bytes = Uint8Array.from(Buffer.from(convertShortcodes(text), 'utf8'));
-    const { nonce, ciphertext } = encryptMessage(bytes, key);
-    const payload = {
-      from: meUserRef.current,
-      to: peerUsername.trim(),
-      ciphertext,
-      nonce,
-      fingerprint: fingerprintPublicKey(me.publicKey),
-      timestamp: Date.now(),
-    };
-    const tempId = Math.random().toString(36);
-    setSendingMessageId(tempId);
-    const newMessage: ChatItem = {
-      id: tempId,
-      fromMe: true,
-      text,
-      timestamp: payload.timestamp,
-      attachment: null,
-      status: 'sending',
-    };
-    setItems((prev) => [...prev, newMessage].sort((a, b) => a.timestamp - b.timestamp));
+    
+    const normalizedFrom = meUserRef.current.trim().toLowerCase();
+    const normalizedTo = peerUsername.trim().toLowerCase();
+    
+    if (!normalizedFrom || !normalizedTo) {
+      Alert.alert('Error', 'Invalid username. Please try again.');
+      return;
+    }
+    
     try {
-    const resp = await sendMessage(payload);
+      const bytes = Uint8Array.from(Buffer.from(convertShortcodes(text), 'utf8'));
+      const { nonce, ciphertext } = encryptMessage(bytes, key);
+      const payload = {
+        from: normalizedFrom,
+        to: normalizedTo,
+        ciphertext,
+        nonce,
+        fingerprint: fingerprintPublicKey(me.publicKey),
+        timestamp: Date.now(),
+      };
+      const tempId = Math.random().toString(36);
+      setSendingMessageId(tempId);
+      const newMessage: ChatItem = {
+        id: tempId,
+        fromMe: true,
+        text,
+        timestamp: payload.timestamp,
+        attachment: null,
+        status: 'sending',
+      };
+      setItems((prev) => [...prev, newMessage].sort((a, b) => a.timestamp - b.timestamp));
+      
+      console.log('[ChatScreen] Sending message:', { from: normalizedFrom, to: normalizedTo });
+      const resp = await sendMessage(payload);
       const msgId = resp?.id || tempId;
+      console.log('[ChatScreen] Message sent successfully:', msgId);
+      
       setSendingMessageId(null);
       setItems((prev) => {
         const updated = prev.map((item) =>
@@ -327,21 +440,30 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
         );
         return updated.sort((a, b) => a.timestamp - b.timestamp);
       });
+      
+      // Update since timestamp to trigger immediate poll
+      sinceRef.current = payload.timestamp;
+      setSince(payload.timestamp);
+      
+      // Scroll to bottom after sending (message already added to list)
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
-      }, 200);
-    if (selfDestructSec) {
-      setTimeout(async () => {
+      }, 150);
+      
+      if (selfDestructSec) {
+        setTimeout(async () => {
           setItems((prev) => prev.filter((i) => i.id !== msgId));
           try {
-            await deleteMessage(msgId, meUserRef.current || me.publicKey);
+            await deleteMessage(msgId, normalizedFrom);
           } catch {}
-      }, selfDestructSec * 1000);
+        }, selfDestructSec * 1000);
       }
     } catch (e) {
+      console.error('[ChatScreen] Send error:', e);
       setSendingMessageId(null);
       setItems((prev) => prev.filter((i) => i.id !== tempId));
-      Alert.alert('Error', 'Failed to send message');
+      const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+      Alert.alert('Failed to send message', errorMessage);
     }
   };
 
@@ -430,8 +552,8 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
         meUserRef.current = username;
       }
       const payload = {
-        from: meUserRef.current,
-        to: peerUsername.trim(),
+        from: meUserRef.current.trim().toLowerCase(),
+        to: peerUsername.trim().toLowerCase(),
         ciphertext: '',
         nonce: enc.nonce,
         fingerprint: fingerprintPublicKey(me.publicKey),
@@ -468,9 +590,15 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
             .sort((a, b) => a.timestamp - b.timestamp);
           return updated;
         });
+        
+        // Update since timestamp to trigger immediate poll
+        sinceRef.current = payload.timestamp;
+        setSince(payload.timestamp);
+        
+        // Scroll to bottom after sending attachment
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
-        }, 200);
+        }, 150);
         if (selfDestructSec) {
           setTimeout(async () => {
             setItems((prev) => prev.filter((i) => i.id !== msgId));
@@ -727,8 +855,8 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
         meUserRef.current = username;
       }
       const payload = {
-        from: meUserRef.current,
-        to: peerUsername.trim(),
+        from: meUserRef.current.trim().toLowerCase(),
+        to: peerUsername.trim().toLowerCase(),
         ciphertext: '',
         nonce: enc.nonce,
         fingerprint: fingerprintPublicKey(me.publicKey),
@@ -765,9 +893,15 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
             .sort((a, b) => a.timestamp - b.timestamp);
           return updated;
         });
+        
+        // Update since timestamp to trigger immediate poll
+        sinceRef.current = payload.timestamp;
+        setSince(payload.timestamp);
+        
+        // Scroll to bottom after sending voice message
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
-        }, 200);
+        }, 150);
       } catch (e) {
         setSendingMessageId(null);
         setItems((prev) => prev.filter((i) => i.id !== tempId));
@@ -787,9 +921,9 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
         <View style={styles.headerContent}>
           {onBack && (
             <TouchableOpacity onPress={onBack} style={styles.backButton}>
-              <Text style={styles.backIcon}>←</Text>
-          </TouchableOpacity>
-        )}
+              <Text style={styles.backIcon}>‹</Text>
+            </TouchableOpacity>
+          )}
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>
               {peerUsername[0]?.toUpperCase() || '?'}
@@ -859,19 +993,40 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
         )}
         contentContainerStyle={styles.messagesContent}
         inverted={false}
-        onContentSizeChange={() => {
-          setTimeout(() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          }, 100);
-        }}
+        // Removed onContentSizeChange auto-scroll to prevent unwanted scrolling
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-              No messages yet
-            </Text>
-            <Text style={[styles.emptySubtext, { color: theme.colors.textTertiary }]}>
-              Start the conversation
-            </Text>
+            {isLoadingPeer ? (
+              <>
+                <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                  Loading...
+                </Text>
+                <Text style={[styles.emptySubtext, { color: theme.colors.textTertiary }]}>
+                  Setting up secure connection
+                </Text>
+              </>
+            ) : peerNotFound ? (
+              <>
+                <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                  User not found
+                </Text>
+                <Text style={[styles.emptySubtext, { color: theme.colors.textTertiary }]}>
+                  {peerUsername} is not registered on the server
+                </Text>
+                <Text style={[styles.emptySubtext, { color: theme.colors.textTertiary, marginTop: 8, fontSize: 12 }]}>
+                  Make sure the server is running and the user has registered. Check server console for available users.
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                  No messages yet
+                </Text>
+                <Text style={[styles.emptySubtext, { color: theme.colors.textTertiary }]}>
+                  Start the conversation
+                </Text>
+              </>
+            )}
           </View>
         }
       />
@@ -897,17 +1052,19 @@ export default function ChatScreen({ peerUsername, onBack }: ChatScreenProps) {
         </View>
       )}
 
-      {/* Composer */}
-      <Composer
-        value={input}
-        onChangeText={setInput}
-        onSend={onSend}
-        onAttach={onAttach}
-        onEmojiPress={() => setShowEmojiPicker(true)}
-        onLongPressSend={handleLongPressSend}
-        onVoiceRecord={handleVoiceRecord}
-        placeholder="Type a message..."
-      />
+      {/* Composer - Only show if peer is found and loaded */}
+      {!peerNotFound && !isLoadingPeer && (
+        <Composer
+          value={input}
+          onChangeText={setInput}
+          onSend={onSend}
+          onAttach={onAttach}
+          onEmojiPress={() => setShowEmojiPicker(true)}
+          onLongPressSend={handleLongPressSend}
+          onVoiceRecord={handleVoiceRecord}
+          placeholder="Type a message..."
+        />
+      )}
 
       {/* Emoji Picker */}
       <EmojiPicker

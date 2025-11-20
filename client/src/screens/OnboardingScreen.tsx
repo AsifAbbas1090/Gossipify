@@ -93,7 +93,7 @@ export default function OnboardingScreen({ navigation }: Props) {
     if (!username.trim()) return;
     try {
       setBusy(true);
-      const uname = username.trim();
+      const uname = username.trim().toLowerCase(); // Normalize to lowercase
       const existing = await getStoredKeypair();
       const kp = existing || (await generateKeypair());
       await register(uname, kp.publicKey);
